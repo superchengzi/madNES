@@ -11,6 +11,7 @@
 #include "shaders.glsl.h"
 #include <assert.h>
 #include <stdlib.h> // malloc/free
+#include <string.h>
 
 #define GFX_DEF(v,def) (v?v:def)
 
@@ -49,7 +50,7 @@ typedef struct {
     } icon;
     int flash_success_count;
     int flash_error_count;
-    void (*draw_extra_cb)(void);
+    gfx_draw_extra_t draw_extra_cb;
 } gfx_state_t;
 static gfx_state_t state;
 
@@ -77,6 +78,15 @@ static const float gfx_verts_flipped_rot[] = {
     0.0f, 1.0f, 0.0f, 1.0f,
     1.0f, 1.0f, 0.0f, 0.0f
 };
+
+static sg_range gfx_select_vertices(void) {
+    return (sg_range){
+        .ptr = sg_query_features().origin_top_left ?
+               (state.display.portrait ? gfx_verts_rot : gfx_verts) :
+               (state.display.portrait ? gfx_verts_flipped_rot : gfx_verts_flipped),
+        .size = sizeof(gfx_verts),
+    };
+}
 
 // a bit-packed speaker-off icon
 static const struct {
@@ -157,6 +167,11 @@ void gfx_disable_speaker_icon(void) {
     state.disable_speaker_icon = true;
 }
 
+chips_dim_t gfx_pixel_aspect(void) {
+    assert(state.valid);
+    return state.offscreen.pixel_aspect;
+}
+
 sg_image gfx_create_icon_texture(const uint8_t* packed_pixels, int width, int height, int stride) {
     const size_t pixel_data_size = width * height * sizeof(uint32_t);
     uint32_t* pixels = malloc(pixel_data_size);
@@ -204,10 +219,10 @@ static void gfx_init_images_and_pass(void) {
     // a texture with the emulator's raw pixel data
     assert((state.fb.dim.width > 0) && (state.fb.dim.height > 0));
     state.fb.img = sg_make_image(&(sg_image_desc){
+        .usage.stream_update = true,
         .width = state.fb.dim.width,
         .height = state.fb.dim.height,
         .pixel_format = state.fb.paletted ? SG_PIXELFORMAT_R8 : SG_PIXELFORMAT_RGBA8,
-        .usage = SG_USAGE_STREAM,
     });
 
     // a sampler for sampling the emulators raw pixel data
@@ -221,7 +236,7 @@ static void gfx_init_images_and_pass(void) {
     // 2x-upscaling render target texture, sampler and pass
     assert((state.offscreen.view.width > 0) && (state.offscreen.view.height > 0));
     state.offscreen.img = sg_make_image(&(sg_image_desc){
-        .render_target = true,
+        .usage.render_attachment = true,
         .width = 2 * state.offscreen.view.width,
         .height = 2 * state.offscreen.view.height,
         .sample_count = 1,
@@ -319,12 +334,7 @@ void gfx_init(const gfx_desc_t* desc) {
         .colors[0] = { .load_action = SG_LOADACTION_CLEAR, .clear_value = { 0.05f, 0.05f, 0.05f, 1.0f } }
     };
     state.display.vbuf = sg_make_buffer(&(sg_buffer_desc){
-        .data = {
-            .ptr = sg_query_features().origin_top_left ?
-                   (state.display.portrait ? gfx_verts_rot : gfx_verts) :
-                   (state.display.portrait ? gfx_verts_flipped_rot : gfx_verts_flipped),
-            .size = sizeof(gfx_verts)
-        }
+        .data = gfx_select_vertices(),
     });
 
     state.display.pip = sg_make_pipeline(&(sg_pipeline_desc){
@@ -385,7 +395,7 @@ static void apply_viewport(chips_dim_t canvas, chips_rect_t view, chips_dim_t pi
     if (ch < 1.0f) {
         ch = 1.0f;
     }
-    const float canvas_aspect = (float)cw / (float)ch;
+    const float canvas_aspect = cw / ch;
     const chips_dim_t aspect = pixel_aspect;
     const float emu_aspect = (float)(view.width * aspect.width) / (float)(view.height * aspect.height);
     float vp_x, vp_y, vp_w, vp_h;
@@ -393,13 +403,13 @@ static void apply_viewport(chips_dim_t canvas, chips_rect_t view, chips_dim_t pi
         vp_y = (float)border.top;
         vp_h = ch;
         vp_w = (ch * emu_aspect);
-        vp_x = border.left + (cw - vp_w) / 2;
+        vp_x = border.left + (cw - vp_w) * 0.5f;
     }
     else {
         vp_x = (float)border.left;
         vp_w = cw;
         vp_h = (cw / emu_aspect);
-        vp_y = (float)border.top;
+        vp_y = border.top + (ch - vp_h) * 0.5f;
     }
     sg_apply_viewportf(vp_x, vp_y, vp_w, vp_h, true);
 }
@@ -420,7 +430,7 @@ void gfx_draw(chips_display_info_t display_info) {
     }
 
     // if audio is off, draw speaker icon via sokol-gl
-    if (!state.disable_speaker_icon && saudio_suspended()) {
+    if (!state.disable_speaker_icon && saudio_isvalid() && saudio_suspended()) {
         const float x0 = display.width - (float)state.icon.dim.width - 10.0f;
         const float x1 = x0 + (float)state.icon.dim.width;
         const float y0 = 10.0f;
@@ -457,13 +467,11 @@ void gfx_draw(chips_display_info_t display_info) {
     sg_apply_pipeline(state.offscreen.pip);
     sg_apply_bindings(&(sg_bindings){
         .vertex_buffers[0] = state.offscreen.vbuf,
-        .fs = {
-            .images = {
-                [SLOT_fb_tex] = state.fb.img,
-                [SLOT_pal_tex] = state.fb.pal_img,
-            },
-            .samplers[SLOT_smp] = state.fb.smp,
-        }
+        .images = {
+            [IMG_fb_tex] = state.fb.img,
+            [IMG_pal_tex] = state.fb.pal_img,
+        },
+        .samplers[SMP_smp] = state.fb.smp,
     });
     const offscreen_vs_params_t vs_params = {
         .uv_offset = {
@@ -475,7 +483,7 @@ void gfx_draw(chips_display_info_t display_info) {
             (float)state.offscreen.view.height / (float)state.fb.dim.height
         }
     };
-    sg_apply_uniforms(SG_SHADERSTAGE_VS, SLOT_offscreen_vs_params, &SG_RANGE(vs_params));
+    sg_apply_uniforms(UB_offscreen_vs_params, &SG_RANGE(vs_params));
     sg_draw(0, 4, 1);
     sg_end_pass();
 
@@ -502,17 +510,19 @@ void gfx_draw(chips_display_info_t display_info) {
     sg_apply_pipeline(state.display.pip);
     sg_apply_bindings(&(sg_bindings){
         .vertex_buffers[0] = state.display.vbuf,
-        .fs = {
-            .images[SLOT_tex] = state.offscreen.img,
-            .samplers[SLOT_smp] = state.offscreen.smp,
-        }
+        .images[IMG_tex] = state.offscreen.img,
+        .samplers[SMP_smp] = state.offscreen.smp,
     });
     sg_draw(0, 4, 1);
     sg_apply_viewport(0, 0, display.width, display.height, true);
     sdtx_draw();
     sgl_draw();
     if (state.draw_extra_cb) {
-        state.draw_extra_cb();
+        state.draw_extra_cb(&(gfx_draw_info_t){
+            .display_image = state.offscreen.img,
+            .display_sampler = state.offscreen.smp,
+            .display_info = display_info,
+        });
     }
     sg_end_pass();
     sg_commit();

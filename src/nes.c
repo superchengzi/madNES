@@ -107,7 +107,7 @@ static void app_init(void) {
 #endif
 
     if (sargs_exists("file")) {
-        fs_start_load_file(FS_SLOT_IMAGE, sargs_value("file"));
+        fs_load_file_async(FS_CHANNEL_IMAGES, sargs_value("file"));
     }
 }
 
@@ -185,11 +185,11 @@ static void draw_status_bar(void) {
 static void handle_file_loading(void) {
     fs_dowork();
     const uint32_t load_delay_frames = 120;
-    if (fs_success(FS_SLOT_IMAGE) && clock_frame_count_60hz() > load_delay_frames) {
+    if (fs_success(FS_CHANNEL_IMAGES) && clock_frame_count_60hz() > load_delay_frames) {
 
         bool load_success = false;
-        if (fs_ext(FS_SLOT_IMAGE, "nes")) {
-            load_success = nes_insert_cart(&state.nes, fs_data(FS_SLOT_IMAGE));
+        if (fs_ext(FS_CHANNEL_IMAGES, "nes")) {
+            load_success = nes_insert_cart(&state.nes, fs_data(FS_CHANNEL_IMAGES));
         }
         if (load_success) {
             if (clock_frame_count_60hz() > (load_delay_frames + 10)) {
@@ -199,14 +199,14 @@ static void handle_file_loading(void) {
         else {
             gfx_flash_error();
         }
-        fs_reset(FS_SLOT_IMAGE);
+        fs_reset(FS_CHANNEL_IMAGES);
     }
 }
 
 void app_input(const sapp_event* event) {
     // accept dropped files also when ImGui grabs input
     if (event->type == SAPP_EVENTTYPE_FILES_DROPPED) {
-        fs_start_load_dropped_file(FS_SLOT_IMAGE);
+        fs_load_dropped_file_async(FS_CHANNEL_IMAGES);
     }
 #ifdef CHIPS_USE_UI
     if (ui_input(event)) {

@@ -67,18 +67,23 @@ typedef struct {
 } ui_nes_desc_t;
 
 typedef struct {
+    const char* title;
     int x, y;
     int w, h;
     bool open;
     bool mode16;
     ui_dbg_texture_callbacks_t texture_cbs;
-    void* tex_pattern_tables[2];
-    void* tex_name_tables;
-    void* tex_name_table_tooltip;
-    void* tex_sprites;
+    ui_texture_t tex_pattern_tables[2];
+    ui_texture_t tex_name_tables;
+    ui_texture_t tex_name_table_tooltip;
+    ui_texture_t tex_sprites;
     int pattern_pal_index;
     uint32_t pixel_buffer[512*512];
 } ui_nes_video_t;
+
+typedef struct {
+    ui_display_frame_t display;
+} ui_nes_frame_t;
 
 typedef struct {
     int x, y;
@@ -114,7 +119,7 @@ typedef struct {
 
 void ui_nes_init(ui_nes_t* ui, const ui_nes_desc_t* desc);
 void ui_nes_discard(ui_nes_t* ui);
-void ui_nes_draw(ui_nes_t* ui);
+void ui_nes_draw(ui_nes_t* ui, const ui_nes_frame_t* frame);
 chips_debug_t ui_nes_get_debug(ui_nes_t* ui);
 
 #ifdef __cplusplus
@@ -161,9 +166,10 @@ static void _ui_nes_draw_menu(ui_nes_t* ui) {
         }
         if (ImGui::BeginMenu("Debug")) {
             ImGui::MenuItem("CPU Debugger", 0, &ui->dbg.ui.open);
-            ImGui::MenuItem("Breakpoints", 0, &ui->dbg.ui.show_breakpoints);
-            ImGui::MenuItem("Execution History", 0, &ui->dbg.ui.show_history);
-            ImGui::MenuItem("Memory Heatmap", 0, &ui->dbg.ui.show_heatmap);
+            ImGui::MenuItem("Breakpoints", 0, &ui->dbg.ui.breakpoints.open);
+            ImGui::MenuItem("Stopwatch", 0, &ui->dbg.ui.stopwatch.open);
+            ImGui::MenuItem("Execution History", 0, &ui->dbg.ui.history.open);
+            ImGui::MenuItem("Memory Heatmap", 0, &ui->dbg.ui.heatmap.open);
             if (ImGui::BeginMenu("Memory Editor")) {
                 ImGui::MenuItem("Window #1", 0, &ui->memedit[0].open);
                 ImGui::MenuItem("Window #2", 0, &ui->memedit[1].open);
@@ -313,6 +319,8 @@ static void _ui_nes_mem_write(int layer, uint16_t addr, uint8_t data, void* user
 void ui_nes_init(ui_nes_t* ui, const ui_nes_desc_t* ui_desc) {
     CHIPS_ASSERT(ui && ui_desc);
     CHIPS_ASSERT(ui_desc->nes);
+    memset(ui, 0, sizeof(ui_nes_t));
+    
     ui->nes = ui_desc->nes;
     ui_snapshot_init(&ui->snapshot, &ui_desc->snapshot);
     int x = 20, y = 20, dx = 10, dy = 10;
@@ -804,8 +812,8 @@ void _ui_r2c02_draw(ui_nes_t* ui) {
     ImGui::End();
 }
 
-void ui_nes_draw(ui_nes_t* ui) {
-    CHIPS_ASSERT(ui && ui->nes);
+void ui_nes_draw(ui_nes_t* ui, const ui_nes_frame_t* frame) {
+    CHIPS_ASSERT(ui && ui->nes && frame);
     _ui_nes_draw_menu(ui);
     ui_m6502_draw(&ui->cpu);
     ui_audio_draw(&ui->audio, ui->nes->audio.sample_pos);
@@ -818,6 +826,7 @@ void ui_nes_draw(ui_nes_t* ui) {
     _ui_nes_draw_cartridge(ui);
     _ui_nes_draw_input(ui);
     _ui_r2c02_draw(ui);
+    // ui_display_draw(&ui->display, &frame->display);
 }
 
 chips_debug_t ui_nes_get_debug(ui_nes_t* ui) {
